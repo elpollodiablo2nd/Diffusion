@@ -1,0 +1,93 @@
+{
+  "project": "denovo_binder_example",
+  "device": "gpu",
+  "seed": 42,
+  "paths": {
+    "target_pdb": "data/example_target.pdb",
+    "workdir": "runs/example"
+  },
+  "part1_diffusion": {
+    "enabled": true,
+    "setup": {
+      "repo_url": "https://github.com/RosettaCommons/RFdiffusion.git",
+      "repo_dir": "vendor/RFdiffusion",
+      "venv": "envs/part1",
+      "python": "3.10",
+      "cuda_version": "cu121",
+      "torch_version": "2.4.1",
+      "dgl_version": "2.4.1",
+      "download_models": true
+    },
+    "target_chain": "A",
+    "target_residues": "1-79",
+    "binder_length": "50-80",
+    "contigs": null,
+    "hotspot_res": ["A31", "A35", "A39"],
+    "num_designs": 20,
+    "diffusion_steps": 50,
+    "noise_scale_ca": 0.0,
+    "noise_scale_frame": 0.0,
+    "write_trajectory": false,
+    "extra_args": {}
+  },
+  "part2_proteinmpnn": {
+    "enabled": true,
+    "setup": {
+      "repo_url": "https://github.com/dauparas/ProteinMPNN.git",
+      "repo_dir": "vendor/ProteinMPNN",
+      "venv": "envs/part2",
+      "python": "3.10",
+      "cuda_version": "cu121",
+      "torch_version": "2.4.1"
+    },
+    "input_glob": null,
+    "binder_chain": "auto",
+    "num_seq_per_target": 4,
+    "sampling_temp": "0.1",
+    "batch_size": 1,
+    "model_name": "v_48_020",
+    "max_backbones": null
+  },
+  "part3_colabfold": {
+    "enabled": true,
+    "setup": {
+      "repo_url": "https://github.com/sokrypton/ColabFold.git",
+      "repo_dir": "vendor/ColabFold",
+      "venv": "envs/part3",
+      "python": "3.10",
+      "jax_version": "0.6.2",
+      "jax_cuda": true
+    },
+    "input_glob": null,
+    "model_type": "alphafold2_multimer_v3",
+    "model_order": "1",
+    "num_models": 1,
+    "num_recycle": 3,
+    "num_seeds": 1,
+    "pair_mode": "unpaired",
+    "rank_by": "multimer",
+    "msa_mode": "mmseqs2_uniref_env",
+    "skip_output": ["plots"],
+    "max_designs": null,
+    "extra_args": {}
+  },
+  "eval": {
+    "plddt_min": 0.7,
+    "ipae_max": 10.0,
+    "plddt_scope": "binder",
+    "top_n": 10
+  },
+  "smoke": {
+    "paths": { "workdir": "runs/smoke" },
+    "part1_diffusion": {
+      "target_residues": "1-40",
+      "binder_length": "15-25",
+      "hotspot_res": ["A20"],
+      "num_designs": 2,
+      "diffusion_steps": 10
+    },
+    "part2_proteinmpnn": { "num_seq_per_target": 2, "max_backbones": 2 },
+    "part3_colabfold": { "num_models": 1, "num_recycle": 1, "max_designs": 4 },
+    "eval": { "top_n": 5 }
+  }
+}
