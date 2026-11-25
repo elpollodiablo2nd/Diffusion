@@ -66,7 +66,7 @@
     "num_seeds": 1,
     "pair_mode": "unpaired",
     "rank_by": "multimer",
-    "msa_mode": "mmseqs2_uniref_env",
+    "msa_mode": "single_sequence",
     "skip_output": ["plots"],
     "max_designs": null,
     "extra_args": {}

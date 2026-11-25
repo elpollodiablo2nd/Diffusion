@@ -117,6 +117,23 @@ def pdb_chain_sequence(pdb: Path, chain: str) -> str:
     return "".join(residues[k] for k in sorted(residues))
 
 
+def pdb_chain_bfacts(pdb: Path) -> dict[str, float]:
+    """Mean B-factor per chain. RFdiffusion marks diffused (binder) residues with B-factor 0."""
+    sums: dict[str, float] = {}
+    counts: dict[str, int] = {}
+    for line in Path(pdb).read_text().splitlines():
+        if not line.startswith("ATOM"):
+            continue
+        ch = line[21]
+        try:
+            b = float(line[60:66])
+        except ValueError:
+            b = 1.0
+        sums[ch] = sums.get(ch, 0.0) + b
+        counts[ch] = counts.get(ch, 0) + 1
+    return {ch: sums[ch] / counts[ch] for ch in sums}
+
+
 def read_fasta(path: Path) -> list[tuple[str, str]]:
     records: list[tuple[str, str]] = []
     header, seq = None, []
@@ -130,6 +147,15 @@ def read_fasta(path: Path) -> list[tuple[str, str]]:
     if header is not None:
         records.append((header, "".join(seq)))
     return records
+
+
+def fasta_chain_lengths(path: Path) -> list[int]:
+    """Chain lengths of a (multimer) FASTA. ColabFold splits each record's
+    sequence on ':' into the chains of the complex."""
+    lengths: list[int] = []
+    for _, seq in read_fasta(path):
+        lengths.extend(len(part) for part in seq.split(":"))
+    return lengths
 
 
 def write_fasta(path: Path, records: Iterable[tuple[str, str]]) -> None:

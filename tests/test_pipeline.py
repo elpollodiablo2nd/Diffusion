@@ -21,6 +21,34 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from pipeline import metrics  # noqa: E402
+from pipeline.stage_mpnn import resolve_binder_chain  # noqa: E402
+from pipeline.util import pdb_chain_bfacts  # noqa: E402
+
+
+def _write_pdb(path, chain_bfacts: dict[str, float], nres: int = 3):
+    with path.open("w") as fh:
+        for chain, b in chain_bfacts.items():
+            for i in range(1, nres + 1):
+                fh.write(f"ATOM  {i:5d}  CA  ALA {chain}{i:4d}    "
+                         f"{10.0 + i:8.3f}{20.0:8.3f}{30.0:8.3f}  1.00{b:6.2f}           C\n")
+        fh.write("END\n")
+
+
+def test_binder_chain_detection():
+    with tempfile.TemporaryDirectory() as tmp:
+        pdb = Path(tmp) / "complex.pdb"
+        # RFdiffusion marks diffused/binder residues with B-factor 0; here the
+        # binder is chain B even though the contig layout convention says A
+        _write_pdb(pdb, {"A": 1.0, "B": 0.0})
+        bf = pdb_chain_bfacts(pdb)
+        assert bf["B"] == 0.0 and bf["A"] == 1.0
+        ctx = {"binder_chains": ["A"], "receptor_chain": "B"}
+        assert resolve_binder_chain({"binder_chain": "auto"}, ctx, ["A", "B"], pdb=pdb) == "B"
+        # explicit setting wins
+        assert resolve_binder_chain({"binder_chain": "A"}, ctx, ["A", "B"], pdb=pdb) == "A"
+        # no B-factor signal -> fall back to contig layout / receptor difference
+        _write_pdb(pdb, {"A": 1.0, "B": 1.0})
+        assert resolve_binder_chain({"binder_chain": "auto"}, ctx, ["A", "B"], pdb=pdb) == "A"
 
 
 def run_pipeline(args: list[str]) -> subprocess.CompletedProcess:
@@ -64,6 +92,7 @@ def test_dry_run_command_construction(tmp_workdir=None):
         assert "colabfold_batch" in blob
         assert "alphafold2_multimer_v3" in blob
         assert "--num-recycle" in blob
+        assert "--msa-mode" in blob and "single_sequence" in blob  # local-only, no MSA server
         entries = {e["stage"]: e for e in manifest["entries"]}
         assert set(["diffuse", "mpnn", "refold", "eval"]) <= set(entries) or True
         assert entries["diffuse"]["mode"] == "dry-run"
@@ -124,9 +153,12 @@ def test_real_mpnn_cpu():
             assert len(row["binder_seq"]) > 0 and len(row["target_seq"]) > 0
             fa = Path(row["fasta"])
             assert fa.exists()
-            content = fa.read_text()
-            assert content.startswith(">target\n")
-            assert ">binder\n" in content
+            lines = fa.read_text().strip().splitlines()
+            assert lines[0].startswith(">")
+            parts = lines[1].split(":")  # ColabFold multimer: one record, seq1:seq2
+            assert len(parts) == 2
+            assert parts[0] == row["target_seq"]
+            assert parts[1] == row["binder_seq"]
         summary = json.loads((workdir / "4_eval" / "summary.json").read_text())
         assert summary["n_total"] == 4
 
@@ -134,6 +166,8 @@ def test_real_mpnn_cpu():
 if __name__ == "__main__":
     test_metrics_math()
     print("PASS test_metrics_math")
+    test_binder_chain_detection()
+    print("PASS test_binder_chain_detection")
     test_dry_run_command_construction()
     print("PASS test_dry_run_command_construction")
     test_smoke_mock_end_to_end()

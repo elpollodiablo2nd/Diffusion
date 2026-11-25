@@ -14,21 +14,39 @@ import shutil
 from pathlib import Path
 
 from .setup import ensure_setup
-from .util import (device_env, pdb_chain_ids, pdb_chain_residues, run_cmd,
-                   venv_python, write_fasta)
+from .util import (device_env, fasta_chain_lengths, pdb_chain_bfacts,
+                   pdb_chain_ids, pdb_chain_residues, run_cmd, venv_python,
+                   write_fasta)
 
 
-def resolve_binder_chain(cfg: dict, ctx: dict, chains: list[str]) -> str:
+def resolve_binder_chain(cfg: dict, ctx: dict, chains: list[str],
+                         pdb: Path | None = None) -> str:
+    """Pick the binder (designed) chain of a diffused complex PDB.
+
+    Order of evidence:
+      1. explicit `binder_chain` setting (not "auto")
+      2. RFdiffusion marks diffused/binder residues with B-factor 0 in the
+         output PDB -> the chain whose mean B-factor < 0.5 is the binder
+      3. the single chain that is not the receptor chain from the contig layout
+      4. the contig-layout binder chain if present
+      5. first chain
+    """
     setting = str(cfg.get("binder_chain", "auto"))
     if setting != "auto":
         return setting
-    if ctx.get("binder_chains"):
-        return ctx["binder_chains"][0]
+    if pdb is not None and chains:
+        bf = pdb_chain_bfacts(pdb)
+        low = [c for c in chains if c in bf and bf[c] < 0.5]
+        if len(low) == 1:
+            return low[0]
     receptor = ctx.get("receptor_chain")
     others = [c for c in chains if c != receptor] if receptor else []
     if len(others) == 1:
         return others[0]
-    return "A"
+    for c in ctx.get("binder_chains", []):
+        if c in chains:
+            return c
+    return chains[0] if chains else "A"
 
 
 def gather_backbones(settings, cfg: dict, ctx: dict) -> list[Path]:
@@ -103,7 +121,7 @@ def run(settings, ctx: dict) -> list[dict]:
 
     if ctx["dry_run"]:
         stems = [p.stem for p in backbones]
-        binder_chain = resolve_binder_chain(cfg, ctx, [])
+        binder_chain = resolve_binder_chain(cfg, ctx, [], pdb=None)
         ctx["binder_chain"] = binder_chain
         chain_id = {stem: [[binder_chain], []] for stem in stems}
         logger.info("[mpnn][dry-run] chain_id.jsonl would contain:\n%s", json.dumps(chain_id))
@@ -142,9 +160,10 @@ def run(settings, ctx: dict) -> list[dict]:
         shutil.copy(pdb, dst)
         copied.append((stem, dst))
 
-    binder_chain = resolve_binder_chain(cfg, ctx, pdb_chain_ids(copied[0][1]))
+    binder_chain = resolve_binder_chain(cfg, ctx, pdb_chain_ids(copied[0][1]), pdb=copied[0][1])
     ctx["binder_chain"] = binder_chain
-    logger.info("[mpnn] designed (binder) chain: %s", binder_chain)
+    logger.info("[mpnn] designed (binder) chain: %s (chains in complex: %s)",
+                binder_chain, pdb_chain_ids(copied[0][1]))
 
     if ctx["mock"] and "mpnn" in ctx["mock"]:
         rows = mock_designs(settings, cfg, ctx, copied, binder_chain, fastas_dir)
@@ -213,7 +232,8 @@ def collect_rows(settings, cfg, ctx, copied, binder_chain, fastas_dir, out_folde
                 logger.warning("[mpnn] no sequence output for %s", stem)
                 continue
             chain_lens = {c: len(pdb_chain_residues(pdb, c)) for c in chains}
-            target_chain = receptor_chain if receptor_chain in chains else (fixed[0] if fixed else chains[0])
+            target_chain = (receptor_chain if receptor_chain in chains and receptor_chain != binder_chain
+                            else (fixed[0] if fixed else chains[0]))
             target_res = pdb_chain_residues(pdb, target_chain)
             target_seq = "".join(target_res[k] for k in sorted(target_res))
             designed_lengths = [chain_lens[c] for c in sorted(designed)]
@@ -234,7 +254,8 @@ def collect_rows(settings, cfg, ctx, copied, binder_chain, fastas_dir, out_folde
                 chain_seq = dict(zip(sorted(designed), segments))
                 binder_seq = chain_seq.get(binder_chain, "")
                 fa = fastas_dir / f"{stem}_s{k}.fasta"
-                write_fasta(fa, [("target", target_seq), ("binder", binder_seq)])
+                # ColabFold multimer input: ONE fasta record, chains joined by ':'
+                write_fasta(fa, [(fa.stem, f"{target_seq}:{binder_seq}")])
                 row = {
                     "design": stem, "seq_id": k, "score": sample["score"],
                     "global_score": sample["global_score"],
@@ -258,14 +279,14 @@ def mock_designs(settings, cfg, ctx, copied, binder_chain, fastas_dir) -> list[d
     for stem, pdb in copied:
         chains = pdb_chain_ids(pdb)
         binder_res = pdb_chain_residues(pdb, binder_chain) if binder_chain in chains else {}
-        receptor_chain_eff = receptor_chain if receptor_chain in chains else [c for c in chains if c != binder_chain][0]
+        receptor_chain_eff = next((c for c in chains if c != binder_chain), chains[0])
         target_res = pdb_chain_residues(pdb, receptor_chain_eff)
         target_seq = "".join(target_res[k] for k in sorted(target_res))
         binder_len = len(binder_res)
         for k in range(num_seq):
             binder_seq = "".join(rng.choice("ACDEFGHIKLMNPQRSTVWY") for _ in range(binder_len))
             fa = fastas_dir / f"{stem}_s{k}.fasta"
-            write_fasta(fa, [("target", target_seq), ("binder", binder_seq)])
+            write_fasta(fa, [(fa.stem, f"{target_seq}:{binder_seq}")])
             rows.append({
                 "design": stem, "seq_id": k, "score": None, "global_score": None,
                 "seq_recovery": None, "binder_seq": binder_seq, "target_seq": target_seq,

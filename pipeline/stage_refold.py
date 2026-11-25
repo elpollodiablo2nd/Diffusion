@@ -11,7 +11,7 @@ import random
 from pathlib import Path
 
 from .setup import ensure_setup
-from .util import device_env, read_fasta, run_cmd
+from .util import device_env, fasta_chain_lengths, run_cmd
 
 
 def gather_fastas(settings, cfg: dict, ctx: dict) -> list[Path]:
@@ -41,7 +41,7 @@ def build_command(settings, cfg: dict, fasta: Path, outdir: Path) -> list[str]:
         "--num-recycle", str(int(cfg.get("num_recycle", 3))),
         "--num-seeds", str(int(cfg.get("num_seeds", 1))),
         "--pair-mode", str(cfg.get("pair_mode", "unpaired")),
-        "--msa-mode", str(cfg.get("msa_mode", "mmseqs2_uniref_env")),
+        "--msa-mode", str(cfg.get("msa_mode", "single_sequence")),
         "--rank-by", str(cfg.get("rank_by", "multimer")),
         "--random-seed", str(settings.seed),
     ]
@@ -54,8 +54,7 @@ def build_command(settings, cfg: dict, fasta: Path, outdir: Path) -> list[str]:
 
 def mock_scores_json(settings, cfg: dict, fasta: Path, outdir: Path, index: int) -> Path:
     """Write a synthetic ColabFold rank-1 scores JSON + unrelaxed PDB."""
-    records = read_fasta(fasta)
-    lengths = [len(seq) for _, seq in records]
+    lengths = fasta_chain_lengths(fasta)
     n = sum(lengths)
     rng = random.Random(settings.seed + 31 * index)
     good = (index % 2 == 0)
@@ -108,7 +107,11 @@ def run(settings, ctx: dict) -> list[Path]:
             scores.append(mock_scores_json(settings, cfg, fasta, outdir, i))
             logger.info("[refold][mock] wrote %s", scores[-1])
         ctx["refold_scores"] = scores
-        ctx["manifest"].append({"stage": "refold", "mode": "mock", "scores": [str(s) for s in scores]})
+        pdbs = sorted(outdir.glob("*_rank_001_*.pdb"))
+        ctx["refold_pdbs"] = pdbs
+        ctx["manifest"].append({"stage": "refold", "mode": "mock",
+                                "scores": [str(s) for s in scores],
+                                "pdbs": [str(p) for p in pdbs]})
         return scores
 
     if not ctx["dry_run"]:
@@ -127,8 +130,16 @@ def run(settings, ctx: dict) -> list[Path]:
 
     if ctx["dry_run"]:
         ctx["refold_scores"] = []
+        ctx["refold_pdbs"] = []
         return []
     scores = sorted(outdir.glob("*_scores_rank_001_*.json"))
+    pdbs = sorted(outdir.glob("*_rank_001_*.pdb"))
     ctx["refold_scores"] = scores
-    logger.info("[refold] collected %d rank-1 score files", len(scores))
+    ctx["refold_pdbs"] = pdbs
+    logger.info("[refold] collected %d rank-1 score files and %d rank-1 PDBs (unrelaxed%s)",
+                len(scores), len(pdbs), "/relaxed" if any("_relaxed_" in p.name for p in pdbs) else "")
+    for s in scores:
+        stem = s.name.split("_scores_")[0]
+        if not list(outdir.glob(f"{stem}_*_rank_001_*.pdb")):
+            logger.warning("[refold] no PDB found for %s", s.name)
     return scores

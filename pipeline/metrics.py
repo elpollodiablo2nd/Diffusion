@@ -22,7 +22,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from .util import read_fasta
+from .util import fasta_chain_lengths
 
 
 def interface_pae(pae: list[list[float]], lengths: list[int]) -> float:
@@ -55,7 +55,8 @@ def plddt_fraction(plddt, lengths: list[int], scope: str = "binder") -> float:
 
 
 def chain_lengths_from_fasta(fasta: Path) -> list[int]:
-    return [len(seq) for _, seq in read_fasta(fasta)]
+    # ColabFold multimer FASTA: one record, chains joined by ':'
+    return fasta_chain_lengths(fasta)
 
 
 def evaluate(settings, ctx: dict) -> list[dict]:
@@ -97,10 +98,15 @@ def evaluate(settings, ctx: dict) -> list[dict]:
         passed = (plddt_used is not None and plddt_used > plddt_min
                   and ipae is not None and ipae < ipae_max)
         mpnn = mpnn_rows.get(stem, {})
+        base = scores_path.name.split("_scores_")[0]
+        pdbs = (sorted(scores_path.parent.glob(f"{base}_unrelaxed_rank_001_*.pdb"))
+                or sorted(scores_path.parent.glob(f"{base}_relaxed_rank_001_*.pdb"))
+                or sorted(scores_path.parent.glob(f"{base}_*_rank_001_*.pdb")))
         rows.append({
             "design": mpnn.get("design", stem),
             "seq_id": mpnn.get("seq_id", ""),
             "scores_file": str(scores_path),
+            "pdb": str(pdbs[0]) if pdbs else None,
             "plddt": round(plddt_used, 4) if plddt_used is not None else None,
             "plddt_binder": round(plddt_binder, 4) if plddt_binder is not None else None,
             "plddt_complex": round(plddt_complex, 4) if plddt_complex is not None else None,
@@ -141,7 +147,7 @@ def evaluate(settings, ctx: dict) -> list[dict]:
 def write_metrics_csv(path: Path, rows: list[dict]) -> None:
     fields = ["design", "seq_id", "plddt", "plddt_binder", "plddt_complex", "ipae",
               "max_pae", "ptm", "iptm", "mpnn_score", "mpnn_global_score",
-              "seq_recovery", "pass", "scores_file"]
+              "seq_recovery", "pass", "pdb", "scores_file"]
     with path.open("w", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=fields)
         writer.writeheader()
@@ -152,15 +158,10 @@ def write_metrics_csv(path: Path, rows: list[dict]) -> None:
 def copy_passing_pdbs(settings, eval_dir: Path, rows: list[dict]) -> None:
     passing_dir = eval_dir / "passing"
     for row in rows:
-        if not row["pass"]:
+        if not row["pass"] or not row.get("pdb"):
             continue
-        scores_path = Path(row["scores_file"])
-        for pdb in scores_path.parent.glob(f"{scores_path.name.split('_scores_')[0]}_unrelaxed_rank_001_*.pdb"):
-            passing_dir.mkdir(parents=True, exist_ok=True)
-            shutil.copy(pdb, passing_dir / pdb.name)
-        for pdb in scores_path.parent.glob(f"{scores_path.name.split('_scores_')[0]}_relaxed_rank_001_*.pdb"):
-            passing_dir.mkdir(parents=True, exist_ok=True)
-            shutil.copy(pdb, passing_dir / pdb.name)
+        passing_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy(row["pdb"], passing_dir / Path(row["pdb"]).name)
 
 
 def plot_ipae_vs_plddt(path: Path, rows: list[dict], plddt_min: float,

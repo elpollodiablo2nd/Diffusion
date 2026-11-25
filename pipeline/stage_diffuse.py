@@ -89,7 +89,8 @@ def mock_complex_pdb(target_pdb: Path, target_chain: str, res_spec: str,
                   and int(l[22:26]) <= binder_len]
     shift = 80.0 + rng.uniform(0, 20)
 
-    def rechain(atom_lines: list[str], new_chain: str, x_shift: float) -> list[str]:
+    def rechain(atom_lines: list[str], new_chain: str, x_shift: float,
+                zero_bfact: bool = False) -> list[str]:
         out, res_map, next_res = [], {}, 1
         for line in atom_lines:
             key = line[22:27]
@@ -97,14 +98,16 @@ def mock_complex_pdb(target_pdb: Path, target_chain: str, res_spec: str,
                 res_map[key] = next_res
                 next_res += 1
             x = float(line[30:38]) + x_shift
+            bfact = "  0.00" if zero_bfact else line[60:66]
             out.append(line[:21] + new_chain + f"{res_map[key]:4d}" + line[26:30]
-                       + f"{x:8.3f}" + line[38:])
+                       + f"{x:8.3f}" + line[38:60] + bfact + line[66:])
         return out
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("w") as fh:
         fh.write("REMARK   634 mock diffused complex for smoke test\n")
-        fh.write("".join(l + "\n" for l in rechain(binder_src, binder_chain, 0.0)))
+        # binder chain first (chain A), B-factor 0 like real RFdiffusion output
+        fh.write("".join(l + "\n" for l in rechain(binder_src, binder_chain, 0.0, zero_bfact=True)))
         fh.write("TER\n")
         fh.write("".join(l + "\n" for l in rechain(receptor_atoms, receptor_chain, shift)))
         fh.write("TER\nEND\n")

@@ -41,7 +41,7 @@ Workdir layout (per run, e.g. `runs/example/`):
 ```
 1_diffusion/outputs/design_*.pdb     # RFdiffusion backbone complexes (binder chain A, target chain B)
 2_mpnn/pdbs, parsed.jsonl, chain_id.jsonl, out/seqs/*.fa, designs.tsv
-3_refold/fastas/<design>_s<k>.fasta  # >target + >binder for AF2-multimer
+3_refold/fastas/<design>_s<k>.fasta  # ONE record, chains joined by ':' -> seq1:seq2 (ColabFold multimer input)
 3_refold/colabfold/*_scores_rank_001_*.json, *_unrelaxed_rank_001_*.pdb
 4_eval/metrics.csv, summary.json, ipae_vs_plddt.png, passing/
 manifest.json, pipeline.log
@@ -87,10 +87,17 @@ Run individual stages with `--stages setup,diffuse,mpnn,refold,eval` (or `all`).
 - `part1_diffusion.num_designs`, `diffusion_steps` (`diffuser.T`), `noise_scale_ca/frame`,
   `extra_args` (extra RFdiffusion hydra overrides).
 - `part2_proteinmpnn` — `num_seq_per_target`, `sampling_temp`, `batch_size`, `model_name`
-  (`v_48_020`), `binder_chain` (`auto` = the diffused chain, RFdiffusion assigns it chain A).
+  (`v_48_020`), `binder_chain` (`auto` = detected from the diffused PDB: RFdiffusion marks
+  binder residues with B-factor 0, so the chain with mean B-factor < 0.5 is the binder;
+  set explicitly to override).
 - `part3_colabfold` — `model_type` (default `alphafold2_multimer_v3`), `model_order`,
-  `num_models`, `num_recycle`, `num_seeds`, `pair_mode`, `msa_mode`, `rank_by`, `skip_output`,
-  `extra_args` (extra `colabfold_batch` flags).
+  `num_models`, `num_recycle`, `num_seeds`, `pair_mode`, `msa_mode` (default
+  `single_sequence`: **local execution only, no MSA server**), `rank_by`, `skip_output`,
+  `extra_args` (extra `colabfold_batch` flags). Each design FASTA is a single record with
+  chains joined by `:` (`SEQ_target:SEQ_binder`), which ColabFold parses as a multimer
+  complex. Refolding writes rank-1 PDBs (`*_unrelaxed_rank_001_*.pdb`, plus
+  `*_relaxed_rank_001_*.pdb` with `--amber`) alongside the scores JSONs; passing PDBs are
+  copied to `4_eval/passing/`.
 - `eval` — `plddt_min` (0.7), `ipae_max` (10.0 Å), `plddt_scope` (`binder` or `complex`), `top_n`.
 - `smoke` — overrides applied with `--smoke`.
 
@@ -126,6 +133,6 @@ PIPELINE_TEST_REAL_MPNN=1 uv run --group dev pytest tests/test_pipeline.py::test
   server into `vendor/RFdiffusion/models/` (the complex/PPI model `Complex_base_ckpt.pt` is used
   automatically when hotspots are provided). Re-run with `--force-setup` to redo.
 - ColabFold downloads AF2-multimer v3 parameters automatically on the first `colabfold_batch` run.
-- MSA generation uses the ColabFold MSA server by default (`msa_mode: mmseqs2_uniref_env`);
-  set `part3_colabfold.extra_args` (e.g. `{"msa_mode": "single_sequence"}`) for offline use.
+- MSA generation is **local only** by default (`msa_mode: single_sequence` — no MSA server is
+  contacted). Change `part3_colabfold.msa_mode` to e.g. `mmseqs2_uniref_env` if you want server MSAs.
 - `vendor/`, `envs/`, `runs/`, `.venv/` are gitignored — only pipeline code and settings are tracked.
